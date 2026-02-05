@@ -6,28 +6,90 @@
     <title>Nest Control</title>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f4f4f4; }
-        .thermostat { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin: 20px auto; max-width: 400px; }
+        .thermostat, .schedule-panel, .structure-panel { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin: 20px auto; max-width: 500px; }
         .temp-display { font-size: 3em; font-weight: bold; color: #333; }
         .controls { margin-top: 20px; }
-        button { padding: 10px 20px; font-size: 1.2em; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+        button { padding: 10px 20px; font-size: 1em; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
         .btn-heat { background-color: #ff6b6b; color: white; }
         .btn-cool { background-color: #4ecdc4; color: white; }
         .btn-off { background-color: #ccc; color: black; }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn-danger { background-color: #dc3545; color: white; font-size: 0.8em; padding: 5px 10px; }
         .mode-active { border: 2px solid #333; }
         .status { margin-bottom: 10px; color: #666; }
+        table { width: 100%; text-align: left; margin-top: 10px; border-collapse: collapse; }
+        th, td { padding: 8px; border-bottom: 1px solid #ddd; }
+        input, select { padding: 8px; margin: 5px; border-radius: 4px; border: 1px solid #ddd; }
+        .away-mode { background-color: #fff3cd; border: 1px solid #ffeeba; }
     </style>
 </head>
 <body>
 
     <h1>Nest Thermostat</h1>
+
+    <div id="structure-panel" class="structure-panel">
+        Loading Structure...
+    </div>
+
     <div id="container">
-        Loading...
+        Loading Devices...
+    </div>
+
+    <div class="schedule-panel">
+        <h2>Schedule</h2>
+        <div id="schedule-list">Loading...</div>
+
+        <h3>Add Event</h3>
+        <select id="sched-day">
+            <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+            <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+        </select>
+        <input type="time" id="sched-time" required>
+        <input type="number" id="sched-temp" placeholder="Temp" step="0.5" style="width: 60px;">
+        <!-- We need to know which device to schedule. For simplicity, we default to the first one found or let user select if we have list -->
+        <select id="sched-serial"></select>
+        <button class="btn-primary" onclick="addScheduleEvent()">Add</button>
     </div>
 
     <script>
+        let knownDevices = [];
+        let currentStructureId = null;
+
+        function renderStructure(structure) {
+            const div = document.getElementById('structure-panel');
+            if (!structure || !structure.structure_id) {
+                div.style.display = 'none';
+                return;
+            }
+            currentStructureId = structure.structure_id;
+            const isAway = structure.away;
+
+            div.className = 'structure-panel ' + (isAway ? 'away-mode' : '');
+            div.innerHTML = `
+                <h3>${structure.name || 'Home'}</h3>
+                <p>Status: <strong>${isAway ? 'AWAY' : 'HOME'}</strong></p>
+                <button class="btn-primary" onclick="setAway(${!isAway})">
+                    Set to ${isAway ? 'Home' : 'Away'}
+                </button>
+            `;
+            div.style.display = 'block';
+        }
+
         function renderDevices(devices) {
+            knownDevices = devices;
             const container = document.getElementById('container');
             container.innerHTML = '';
+
+            // Update device selector in schedule
+            const schedSelect = document.getElementById('sched-serial');
+            if (schedSelect.options.length === 0) {
+                devices.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.serial;
+                    opt.text = d.name;
+                    schedSelect.appendChild(opt);
+                });
+            }
 
             devices.forEach(device => {
                 const div = document.createElement('div');
@@ -64,15 +126,53 @@
             });
         }
 
+        function renderSchedule(schedule) {
+            const div = document.getElementById('schedule-list');
+            if (schedule.length === 0) {
+                div.innerHTML = '<p>No scheduled events.</p>';
+                return;
+            }
+
+            // Sort schedule by day/time (simple)
+            // A better sort would respect day order, but alphanumeric sort is "okay" for now or just display as is
+
+            let html = '<table><tr><th>Day</th><th>Time</th><th>Temp</th><th>Device</th><th>Action</th></tr>';
+            schedule.forEach(item => {
+                // Find device name
+                const deviceName = knownDevices.find(d => d.serial === item.serial)?.name || item.serial.substring(0, 5) + '...';
+
+                html += `<tr>
+                    <td>${item.day}</td>
+                    <td>${item.time}</td>
+                    <td>${item.temp}</td>
+                    <td>${deviceName}</td>
+                    <td><button class="btn-danger" onclick="deleteSchedule(${item.id})">X</button></td>
+                </tr>`;
+            });
+            html += '</table>';
+            div.innerHTML = html;
+        }
+
         async function fetchStatus() {
             try {
                 const response = await fetch('/api/status');
                 const data = await response.json();
                 if (data.devices) {
                     renderDevices(data.devices);
+                    renderStructure(data.structure);
                 } else if (data.error) {
                     document.getElementById('container').innerText = "Error: " + data.error;
                 }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function fetchSchedule() {
+             try {
+                const response = await fetch('/api/schedule');
+                const data = await response.json();
+                renderSchedule(data);
             } catch (e) {
                 console.error(e);
             }
@@ -84,7 +184,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ serial: serial, action: 'set_temp', value: newTemp })
             });
-            fetchStatus(); // Refresh
+            fetchStatus();
         }
 
         async function updateMode(serial, mode) {
@@ -93,11 +193,50 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ serial: serial, action: 'set_mode', value: mode })
             });
-            fetchStatus(); // Refresh
+            fetchStatus();
+        }
+
+        async function setAway(isAway) {
+            if (!currentStructureId) return;
+            await fetch('/api/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'set_away', structure_id: currentStructureId, away: isAway })
+            });
+            fetchStatus();
+        }
+
+        async function addScheduleEvent() {
+            const day = document.getElementById('sched-day').value;
+            const time = document.getElementById('sched-time').value;
+            const temp = document.getElementById('sched-temp').value;
+            const serial = document.getElementById('sched-serial').value;
+
+            if (!day || !time || !temp || !serial) {
+                alert("Please fill all fields");
+                return;
+            }
+
+            await fetch('/api/schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ day: day, time: time, temp: temp, serial: serial })
+            });
+            fetchSchedule();
+        }
+
+        async function deleteSchedule(id) {
+            await fetch('/api/schedule', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            });
+            fetchSchedule();
         }
 
         // Poll every 10 seconds
         fetchStatus();
+        fetchSchedule();
         setInterval(fetchStatus, 10000);
     </script>
 </body>

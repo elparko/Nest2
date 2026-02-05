@@ -25,8 +25,8 @@ class NestController:
 
     def get_status(self):
         """
-        Fetches the current status of all devices.
-        Returns a simplified dictionary with thermostat data.
+        Fetches the current status of all devices and structure.
+        Returns a dictionary with 'devices' list and 'structure' info.
         """
         if not self.user_id:
             raise ValueError("User ID is required to fetch status.")
@@ -38,23 +38,26 @@ class NestController:
             response.raise_for_status()
             data = response.json()
 
-            # Extract thermostat data
-            # The data structure is complex. We are looking for 'shared' objects.
             devices = []
+            structure_info = {}
 
             shared_data = data.get('shared', {})
             structure_data = data.get('structure', {})
 
+            # Extract Structure Info (assume single structure for simplicity, or take first)
+            if structure_data:
+                # structure_data is a dict of structure_ids -> info
+                for s_id, s_info in structure_data.items():
+                    structure_info = {
+                        'structure_id': s_id,
+                        'away': s_info.get('away'), # True/False (or boolean-like)
+                        'name': s_info.get('name')
+                    }
+                    break # Just take the first one
+
             # Iterate through shared objects to find thermostats
             for serial, device_info in shared_data.items():
-                # Check if it looks like a thermostat (has target_temperature)
                 if 'target_temperature' in device_info or 'current_temperature' in device_info:
-
-                    name = "Nest Thermostat" # Default name
-
-                    # Try to find the name in structure or device maps if possible,
-                    # but for now we just return the serial and basic info.
-
                     device = {
                         'serial': serial,
                         'current_temperature': device_info.get('current_temperature'),
@@ -63,16 +66,16 @@ class NestController:
                         'hvac_mode': device_info.get('hvac_mode'),
                         'target_temperature_high': device_info.get('target_temperature_high'),
                         'target_temperature_low': device_info.get('target_temperature_low'),
-                        'ambient_temperature': device_info.get('current_temperature'), # redundant but clear
+                        'ambient_temperature': device_info.get('current_temperature'),
                         'name': device_info.get('name', serial)
                     }
                     devices.append(device)
 
-            return devices
+            return {'devices': devices, 'structure': structure_info}
 
         except requests.exceptions.RequestException as e:
             print(f"Error fetching status: {e}")
-            return []
+            return {'devices': [], 'structure': {}}
 
     def set_temperature(self, serial, temperature):
         """
@@ -108,4 +111,23 @@ class NestController:
             return response.json()
         except requests.exceptions.RequestException as e:
             print(f"Error setting mode: {e}")
+            return None
+
+    def set_away_mode(self, structure_id, away):
+        """
+        Sets the structure to Away (True) or Home (False).
+        """
+        url = f"https://transport.home.nest.com/v2/put/structure.{structure_id}"
+        payload = {
+            "away": away, # boolean
+            "away_timestamp": int(time.time()),
+            "away_setter": 0
+        }
+
+        try:
+            response = self.session.post(url, json=payload)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error setting away mode: {e}")
             return None
