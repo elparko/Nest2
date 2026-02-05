@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nest Control</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f4f4f4; }
+        .thermostat { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin: 20px auto; max-width: 400px; }
+        .temp-display { font-size: 3em; font-weight: bold; color: #333; }
+        .controls { margin-top: 20px; }
+        button { padding: 10px 20px; font-size: 1.2em; margin: 5px; cursor: pointer; border: none; border-radius: 5px; }
+        .btn-heat { background-color: #ff6b6b; color: white; }
+        .btn-cool { background-color: #4ecdc4; color: white; }
+        .btn-off { background-color: #ccc; color: black; }
+        .mode-active { border: 2px solid #333; }
+        .status { margin-bottom: 10px; color: #666; }
+    </style>
+</head>
+<body>
+
+    <h1>Nest Thermostat</h1>
+    <div id="container">
+        Loading...
+    </div>
+
+    <script>
+        function renderDevices(devices) {
+            const container = document.getElementById('container');
+            container.innerHTML = '';
+
+            devices.forEach(device => {
+                const div = document.createElement('div');
+                div.className = 'thermostat';
+
+                const currentTemp = device.current_temperature ? device.current_temperature.toFixed(1) : '--';
+                const targetTemp = device.target_temperature ? device.target_temperature.toFixed(1) : '--';
+
+                // Determine mode class
+                let heatClass = device.hvac_mode === 'heat' ? 'mode-active' : '';
+                let coolClass = device.hvac_mode === 'cool' ? 'mode-active' : '';
+                let offClass = device.hvac_mode === 'off' ? 'mode-active' : '';
+
+                div.innerHTML = `
+                    <h2>${device.name}</h2>
+                    <div class="status">Humidity: ${device.humidity}% | Mode: ${device.hvac_mode}</div>
+                    <div>Current</div>
+                    <div class="temp-display">${currentTemp}&deg;C</div>
+                    <div>Target</div>
+                    <div class="temp-display">${targetTemp}&deg;C</div>
+
+                    <div class="controls">
+                        <button onclick="updateTemp('${device.serial}', ${device.target_temperature - 0.5})">-</button>
+                        <button onclick="updateTemp('${device.serial}', ${device.target_temperature + 0.5})">+</button>
+                    </div>
+
+                    <div class="controls">
+                        <button class="btn-heat ${heatClass}" onclick="updateMode('${device.serial}', 'heat')">Heat</button>
+                        <button class="btn-cool ${coolClass}" onclick="updateMode('${device.serial}', 'cool')">Cool</button>
+                        <button class="btn-off ${offClass}" onclick="updateMode('${device.serial}', 'off')">Off</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                if (data.devices) {
+                    renderDevices(data.devices);
+                } else if (data.error) {
+                    document.getElementById('container').innerText = "Error: " + data.error;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function updateTemp(serial, newTemp) {
+            await fetch('/api/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serial: serial, action: 'set_temp', value: newTemp })
+            });
+            fetchStatus(); // Refresh
+        }
+
+        async function updateMode(serial, mode) {
+            await fetch('/api/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serial: serial, action: 'set_mode', value: mode })
+            });
+            fetchStatus(); // Refresh
+        }
+
+        // Poll every 10 seconds
+        fetchStatus();
+        setInterval(fetchStatus, 10000);
+    </script>
+</body>
+</html>
